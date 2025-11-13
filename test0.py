@@ -11,8 +11,7 @@ from llm.groq_runtime import GroqRunTime
 # ======================
 # KONFIGURASI
 # ======================
-API_KEY = "AIzaSyA6xxMHukfD0k2dCwIg0tdq5xdb-4SxL4Y"
-CSE_ID = "42a44062dc6174fc3"
+
 MODEL_DIR = "./saved_models/IndoBERT_version1/32_2e-05"
 
 BAD_EXT = [".pdf", ".zip", ".doc", ".docx"]
