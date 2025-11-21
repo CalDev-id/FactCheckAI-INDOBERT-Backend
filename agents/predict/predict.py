@@ -14,7 +14,16 @@ model = AutoModelForSequenceClassification.from_pretrained(MODEL_DIR)
 
 def classify_berita(title, content):
     text = f"{title}\n\n{content}"
-    inputs = tokenizer(text, return_tensors="pt", truncation=True, padding=True)
+
+    # ⚡ Truncation aman untuk artikel panjang
+    inputs = tokenizer(
+        text,
+        return_tensors="pt",
+        truncation=True,       # otomatis potong token > max_length
+        padding="max_length",  # pad sampai max_length
+        max_length=512         # pastikan cocok dengan IndoBERT
+    )
+
     with torch.no_grad():
         outputs = model(**inputs)
         probs = torch.nn.functional.softmax(outputs.logits, dim=-1)
@@ -22,5 +31,5 @@ def classify_berita(title, content):
 
     label = "valid" if pred == 1 else "hoaks"
     confidence = round(probs[0][pred].item() * 100, 2)
-    return {"label": label, "confidence": confidence, "probs": probs.tolist()}
 
+    return {"label": label, "confidence": confidence, "probs": probs.tolist()}

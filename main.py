@@ -6,6 +6,7 @@ from agents.predict.predict import classify_berita
 from agents.get_evidence.google_search import google_search
 from agents.get_evidence.scrape_html import scrape_html
 from agents.explanation.explanation import explanation
+from agents.chat.chat import agent
 
 #uvicorn main:app --reload
 app = FastAPI()
@@ -52,15 +53,12 @@ def get_evidence(
 @app.post("/predict_with_evidence/")
 def predict_with_evidence(data: PredictRequest):
 
-    # 1. Model IndoBERT classification
     classification = classify_berita(data.title, data.content)
 
-    # 2. Google Search
     total_results = 10
-    scrape_limit = 2
+    scrape_limit = 3
     links = google_search(data.title, total_results=total_results)
 
-    # 3. Scrape evidence
     scraped = []
     for url in links[:scrape_limit]:
         content = scrape_html(url)
@@ -70,7 +68,6 @@ def predict_with_evidence(data: PredictRequest):
                 "content": content
             })
 
-    # 4. Final judgement by LLM
     llm_output = explanation(
         classification=classification,
         news_scrape=scraped,
@@ -78,13 +75,83 @@ def predict_with_evidence(data: PredictRequest):
         content=data.content
     )
 
-    # 5. Output JSON final
     return {
         "input_user": {
             "title": data.title,
             "content": data.content,
         },
+        "classification": classification,
         "evidence_links": links,
         "evidence_scraped": scraped,
-        "explanation": llm_output  # LLM output JSON
+        "explanation": llm_output 
     }
+
+@app.post("/predict_from_url/")
+def predict_from_url(url: str):
+
+    # 1. Scrape artikel dari URL input
+    scraped_main = scrape_html(url)
+    if not scraped_main or scraped_main.get("content") == "Tidak berhasil ekstrak isi artikel":
+        return {
+            "error": "Gagal mengambil artikel dari URL",
+            "url": url
+        }
+
+    title = scraped_main.get("judul", "")
+    content = scraped_main.get("content", "")
+
+    # 2. Klasifikasi IndoBERT
+    classification = classify_berita(title, content)
+
+    # 3. Google Search untuk mendapatkan evidence
+    total_results = 10
+    scrape_limit = 3
+    links = google_search(title, total_results=total_results)
+
+    # 4. Scrape evidence dari link pencarian
+    scraped_evidence = []
+    for url in links[:scrape_limit]:
+        ev = scrape_html(url)
+        if ev:
+            scraped_evidence.append({
+                "url": url,
+                "content": ev
+            })
+
+    # 5. LLM judgement
+    llm_output = explanation(
+        classification=classification,
+        news_scrape=scraped_evidence,
+        title=title,
+        content=content
+    )
+
+    # 6. Output final
+    return {
+        "input_user": {
+            "url": url,
+            "title": title,
+            "content": content
+        },
+        "classification": classification,
+        "evidence_links": links,
+        "evidence_scraped": scraped_evidence,
+        "explanation": llm_output
+    }
+
+class ChatRequest(BaseModel):
+    message: str
+
+@app.post("/chat/")
+def chat_endpoint(data: ChatRequest):
+    user_message = data.message
+
+    try:
+        # kirim ke agent LangChain
+        response = agent.run(user_message)
+        return {
+            "user": user_message,
+            "response": response
+        }
+    except Exception as e:
+        return {"error": str(e)}

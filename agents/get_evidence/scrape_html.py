@@ -18,10 +18,10 @@ def scrape_html(url):
             "url": url,
             "render_js": "true",
             "block_ads": "true",
-            "wait": "2000"
+            "wait": "4000"
         }
 
-        response = requests.get(api_url, params=params, timeout=25)
+        response = requests.get(api_url, params=params, timeout=100)
 
         if response.status_code != 200:
             print("ScrapingBee error:", response.text)
