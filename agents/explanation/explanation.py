@@ -15,7 +15,7 @@ Berikut adalah berita yang ingin diklasifikasikan:
 
 Judul: {title}
 
-Hasil klasifikasi IndoBERT:
+Hasil klasifikasi model kami:
 {json.dumps(classification, ensure_ascii=False, indent=2)}
 (kadang hasil klasifikasi bisa salah, jadi tentukan berdasarkan bukti yang ada)
 

@@ -3,6 +3,7 @@ from typing import Union
 from fastapi import FastAPI
 from pydantic import BaseModel
 from agents.predict.predict import classify_berita
+from agents.predict.predict import advance_classify_berita
 from agents.get_evidence.google_search import google_search
 from agents.get_evidence.scrape_html import scrape_html
 from agents.explanation.explanation import explanation
@@ -30,23 +31,34 @@ def predict_fake_news(data: PredictRequest):
     result = classify_berita(data.title, data.content)
     return result
 
+class ClaimRequest(BaseModel):
+    claim: str
+
 @app.post("/get_evidence/")
 def get_evidence(
-    data: PredictRequest,
+    data: ClaimRequest,
 ):
     total_results: int = 10
-    scrape_limit: int = 1
-    query = data.title
-
+    scrape_limit: int = 1  # cuma mau 1 evidence
+    query = data.claim
     # 1. Google Search
     links = google_search(query, total_results=total_results)
 
-    # 2. ScrapingBee
+    # 2. Scraping dengan fallback ke link berikutnya
     scraped = []
-    for url in links[:scrape_limit]:
+
+    for url in links:  # cek semua link
+        if len(scraped) >= scrape_limit:
+            break  # sudah cukup evidence
+
         content = scrape_html(url)
-        if content:
-            scraped.append(content)
+
+        if content is None:
+            print(f"❌ Gagal scrape → {url}")
+            continue  # coba link berikutnya
+
+        print(f"✅ Berhasil scrape → {url}")
+        scraped.append(content)
 
     return {
         "query": query,
@@ -56,23 +68,33 @@ def get_evidence(
         "evidence": scraped
     }
 
+
 @app.post("/predict_with_evidence/")
 def predict_with_evidence(data: PredictRequest):
-
-    classification = classify_berita(data.title, data.content)
-
     total_results = 10
-    scrape_limit = 3
+    scrape_limit = 1
     links = google_search(data.title, total_results=total_results)
 
     scraped = []
-    for url in links[:scrape_limit]:
+    for url in links:
+        if len(scraped) >= scrape_limit:
+            break
         content = scrape_html(url)
-        if content:
-            scraped.append({
-                "url": url,
-                "content": content
-            })
+        if content is None:
+            print(f"❌ Gagal scrape → {url}")
+            continue
+        print(f"✅ Berhasil scrape → {url}")
+        scraped.append(content)
+
+    classification = classify_berita(data.title, data.content)
+
+    advance_classification = advance_classify_berita(
+        classification=classification,
+        news_scrape=scraped,
+        title=data.title,
+        evidence_link=links,
+        content=content
+    )
 
     llm_output = explanation(
         classification=classification,
@@ -83,15 +105,15 @@ def predict_with_evidence(data: PredictRequest):
     )
 
     return {
-        "input_user": {
-            "title": data.title,
-            "content": data.content,
-        },
-        "classification": classification,
+        "url": scraped[0].get("link", "") if scraped else "",
+        "title": data.title,
+        "content": data.content,
+        "classification": advance_classification,
         "evidence_links": links,
         "evidence_scraped": scraped,
         "explanation": llm_output 
     }
+
 class UrlRequest(BaseModel):
     url: str
     
@@ -103,7 +125,7 @@ def predict_from_url(data: UrlRequest):
     if not scraped_main or scraped_main.get("content") == "Tidak berhasil ekstrak isi artikel":
         return {
             "error": "Gagal mengambil artikel dari URL",
-            "url": url
+            "url": data.url
         }
 
     title = scraped_main.get("judul", "")
@@ -112,23 +134,28 @@ def predict_from_url(data: UrlRequest):
     # 2. Klasifikasi IndoBERT
     classification = classify_berita(title, content)
 
-    # 3. Google Search untuk mendapatkan evidence
+    # 3. Google Search
     total_results = 10
     scrape_limit = 1
     links = google_search(title, total_results=total_results)
 
-    # 4. Scrape evidence dari link pencarian
+    # 4. Scrape evidence
     scraped_evidence = []
-    for url in links[:scrape_limit]:
-        ev = scrape_html(url)
-        if ev:
-            scraped_evidence.append({
-                "url": url,
-                "content": ev
-            })
+    for url in links:  # cek semua link
+        if len(scraped_evidence) >= scrape_limit:
+            break  # sudah cukup evidence
 
-    # 5. LLM judgement
-    llm_output = explanation(
+        content = scrape_html(url)
+
+        if content is None:
+            print(f"❌ Gagal scrape → {url}")
+            continue  # coba link berikutnya
+
+        print(f"✅ Berhasil scrape → {url}")
+        scraped_evidence.append(content)
+
+    # 5. Advance Classification
+    advance_classification = advance_classify_berita(
         classification=classification,
         news_scrape=scraped_evidence,
         title=title,
@@ -136,19 +163,77 @@ def predict_from_url(data: UrlRequest):
         content=content
     )
 
-    # 6. Output final
+    # 6. LLM judgement
+    llm_output = explanation(
+        classification=advance_classification,
+        news_scrape=scraped_evidence,
+        title=title,
+        evidence_link=links,
+        content=content
+    )
+
+    # 7. Output final
     return {
-        "input_user": {
-            "url": url,
-            "title": title,
-            "content": content
-        },
-        "classification": classification,
+        "url": data.url,
+        "title": title,
+        "content": content,
+        "classification": advance_classification,
         "evidence_links": links,
         "evidence_scraped": scraped_evidence,
         "explanation": llm_output
     }
 
+    
+@app.post("/predict_from_claim/")
+def predict_from_claim(data: ClaimRequest):
+
+    total_results: int = 10
+    scrape_limit: int = 1
+    query = data.claim
+
+    links = google_search(query, total_results=total_results)
+
+    scraped = []
+    for url in links:
+        if len(scraped) >= scrape_limit:
+            break
+        content = scrape_html(url)
+        if content is None:
+            print(f"❌ Gagal scrape → {url}")
+            continue
+        print(f"✅ Berhasil scrape → {url}")
+        scraped.append(content)
+
+    classification = classify_berita(scraped[0].get("judul", ""), scraped[0].get("content", ""))
+
+    advance_classification = advance_classify_berita(
+        classification=classification,
+        news_scrape=scraped,
+        title=scraped[0].get("judul", ""),
+        evidence_link=links,
+        content=scraped[0].get("content", "")
+    )
+
+    llm_output = explanation(
+        classification=advance_classification,
+        news_scrape=scraped,
+        title=scraped[0].get("judul", ""),
+        evidence_link=links,
+        content=scraped[0].get("content", "")
+    )
+
+    return {
+        "url": links[0] if links else "",
+        "title": scraped[0].get("judul", "") if scraped else "",
+        "content": scraped[0].get("content", "") if scraped else "",
+        "classification": advance_classification,
+        "evidence_links": links,
+        "evidence_scraped": scraped,
+        "explanation": llm_output
+    }
+
+
+# CHAT AGENT
 class ChatRequest(BaseModel):
     message: str
 
@@ -172,15 +257,23 @@ def get_news():
     result = supabase.table("news").select("*").execute()
     return result.data
 
-@app.get("/news/{news_id}")
-def get_news_by_id(news_id: str):
-    result = supabase.table("news").select("*").eq("id", news_id).single().execute()
+@app.get("/news/hoaks")
+def get_hoax_news():
+    result = supabase.table("news").select("*").eq("classification", "hoaks").execute()
     return result.data
 
-@app.get("/news/hoax")
-def get_hoax_news():
-    result = supabase.table("news").select("*").eq("classification", "hoax").execute()
+@app.get("/news/valid")
+def get_valid_news():
+    result = supabase.table("news").select("*").eq("classification", "valid").execute()
     return result.data
+
+# TARUH PALING BAWAH
+from uuid import UUID
+@app.get("/news/{news_id}")
+def get_news_by_id(news_id: UUID):
+    result = supabase.table("news").select("*").eq("id", str(news_id)).single().execute()
+    return result.data
+
 
 @app.get("/news/search")
 def search_news(q: str):
