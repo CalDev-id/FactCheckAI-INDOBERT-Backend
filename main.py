@@ -7,6 +7,7 @@ from agents.predict.predict import advance_classify_berita
 from agents.get_evidence.google_search import google_search
 from agents.get_evidence.scrape_html import scrape_html
 from agents.explanation.explanation import explanation
+from agents.claim_check.claim_check import claim_check
 from agents.chat.chat import agent
 from auth.supabase_client import supabase
 from typing import List, Any, Optional
@@ -194,6 +195,23 @@ def predict_from_claim(data: ClaimRequest):
 
     links = google_search(query, total_results=total_results)
 
+    claim_checked = claim_check(data.claim, links)
+
+    if "sesuai" not in claim_checked.lower():
+        return {
+            "url": "",
+            "title": "",
+            "content": "",
+            "classification": {
+                "final_label": "unknown",
+                "final_confidence": 0,
+                "error": "Claim tidak dapat diverifikasi dengan sumber yang ada: " + claim_checked
+            },
+            "evidence_links": links,
+            "evidence_scraped": [],
+            "explanation": "Claim tidak dapat diverifikasi dengan sumber yang ada: " + claim_checked
+        }
+
     scraped = []
     for url in links:
         if len(scraped) >= scrape_limit:
@@ -297,15 +315,27 @@ def get_news():
 
 @app.get("/news/hoaks")
 def get_hoax_news():
-    result = supabase.table("news").select("*").eq("classification", "hoaks").execute()
+    result = (
+        supabase
+        .table("news")
+        .select("*")
+        .eq("classification->>final_label", "hoaks")
+        .execute()
+    )
     return result.data
+
 
 @app.get("/news/valid")
 def get_valid_news():
-    result = supabase.table("news").select("*").eq("classification", "valid").execute()
+    result = (
+        supabase
+        .table("news")
+        .select("*")
+        .eq("classification->>final_label", "valid")
+        .execute()
+    )
     return result.data
 
-# TARUH PALING BAWAH
 from uuid import UUID
 @app.get("/news/{news_id}")
 def get_news_by_id(news_id: UUID):
@@ -318,18 +348,107 @@ def search_news(q: str):
     result = supabase.table("news").select("*").ilike("title", f"%{q}%").execute()
     return result.data
 
+class Classification(BaseModel):
+    final_label: str
+    final_confidence: float
+
 class NewsPayload(BaseModel):
     url: str
     title: str
     content: str
-    classification: str
+    classification: Classification
     evidence_link: Optional[List[str]] = None
-    evidence_scraped: Optional[Any] = None
+    evidence_scraped: Optional[list] = None
     explanation: Optional[str] = None
-
 
 @app.post("/news")
 def insert_news(payload: NewsPayload):
     data = payload.dict()
     result = supabase.table("news").insert(data).execute()
     return result.data
+
+
+
+# AUTH
+from pydantic import BaseModel, EmailStr
+
+class SignUpRequest(BaseModel):
+    email: EmailStr
+    password: str
+
+class LoginRequest(BaseModel):
+    email: EmailStr
+    password: str
+
+from fastapi import HTTPException
+
+@app.post("/auth/signup")
+def signup(payload: SignUpRequest):
+    try:
+        response = supabase.auth.sign_up({
+            "email": payload.email,
+            "password": payload.password
+        })
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    if response.user is None:
+        raise HTTPException(status_code=400, detail="Signup failed")
+
+    return {
+        "user_id": response.user.id,
+        "email": response.user.email
+    }
+
+
+from fastapi import HTTPException
+from supabase_auth.errors import AuthApiError
+
+@app.post("/auth/login")
+def login(payload: LoginRequest):
+    try:
+        response = supabase.auth.sign_in_with_password({
+            "email": payload.email,
+            "password": payload.password
+        })
+    except AuthApiError as e:
+        raise HTTPException(
+            status_code=401,
+            detail=e.message
+        )
+    except Exception:
+        raise HTTPException(
+            status_code=500,
+            detail="Internal authentication error"
+        )
+
+    return {
+        "access_token": response.session.access_token,
+        "refresh_token": response.session.refresh_token,
+        "user": {
+            "id": response.user.id,
+            "email": response.user.email
+        }
+    }
+
+
+from fastapi import Depends, HTTPException, Header
+
+def get_current_user(authorization: str = Header(None)):
+    if authorization is None:
+        raise HTTPException(status_code=401, detail="Missing Authorization header")
+
+    token = authorization.replace("Bearer ", "")
+
+    try:
+        user = supabase.auth.get_user(token)
+        return user.user
+    except Exception:
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
+
+@app.get("/auth/me")
+def get_me(user=Depends(get_current_user)):
+    return {
+        "id": user.id,
+        "email": user.email
+    }
