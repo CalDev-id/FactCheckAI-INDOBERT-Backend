@@ -6,7 +6,6 @@ from routers.auth import get_current_user
 from fastapi import UploadFile, File, Depends, HTTPException
 import uuid
 
-
 router = APIRouter(tags=["Profile"])
 
 class UpdateProfileRequest(BaseModel):
@@ -14,8 +13,6 @@ class UpdateProfileRequest(BaseModel):
     avatar_url: Optional[str] = None
     email: Optional[EmailStr] = None
     password: Optional[str] = None
-
-
 
 @router.patch("/profile")
 def update_profile(
@@ -81,7 +78,7 @@ async def upload_avatar(
             }
         )
 
-        public_url = supabase.storage.from_("Avatar").get_public_url(file_name)["publicUrl"]
+        public_url = supabase.storage.from_("Avatar").get_public_url(file_name)
 
         supabase.table("profiles") \
             .update({"avatar_url": public_url}) \

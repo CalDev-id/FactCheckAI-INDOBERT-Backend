@@ -99,12 +99,19 @@ def insert_news(
 
 @router.get("/news/my")
 def get_my_news(user=Depends(get_current_user)):
-    return (
+    res = (
         supabase
         .table("news")
         .select("*")
         .eq("author_id", user.id)
         .order("inserted_at", desc=True)
         .execute()
-        .data
     )
+
+    if getattr(res, "error", None):
+        print("SUPABASE ERROR:", res.error)
+        raise HTTPException(status_code=500, detail=str(res.error))
+
+    return res.data
+
+
