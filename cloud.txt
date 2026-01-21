@@ -1,0 +1,51 @@
+Opsi A (recommended): 1 tunnel untuk banyak project (paling gampang)
+
+Kamu cukup 1 tunnel (fastapi-laptop) lalu tambah beberapa hostname di config.yml.
+
+Misal kamu punya:
+
+Project 1 di port 8000 → api.caldev.my.id
+
+Project 2 di port 8001 → news.caldev.my.id
+
+Project 3 di port 8002 → hoax.caldev.my.id
+
+1) Tambah DNS route untuk tiap subdomain
+cloudflared tunnel route dns fastapi-laptop news.caldev.my.id
+cloudflared tunnel route dns fastapi-laptop hoax.caldev.my.id
+
+2) Update ~/.cloudflared/config.yml
+
+cat > ~/.cloudflared/config.yml << 'EOF'
+tunnel: 3eb31d6c-0159-4b79-af15-dbb39f03abd6
+credentials-file: /Users/cal/.cloudflared/3eb31d6c-0159-4b79-af15-dbb39f03abd6.json
+
+ingress:
+  - hostname: api.caldev.my.id
+    service: http://127.0.0.1:8000
+  - hostname: news.caldev.my.id
+    service: http://127.0.0.1:8001
+  - hostname: hoax.caldev.my.id
+    service: http://127.0.0.1:8002
+  - service: http_status:404
+EOF
+
+cek : cat ~/.cloudflared/config.yml
+
+buat domain : 
+cloudflared tunnel route dns fastapi-laptop news.caldev.my.id
+cloudflared tunnel route dns fastapi-laptop hoax.caldev.my.id
+
+
+3) Jalankan masing-masing project di portnya
+
+Terminal terpisah atau background:
+
+uvicorn project1.main:app --host 127.0.0.1 --port 8000
+uvicorn project2.main:app --host 127.0.0.1 --port 8001
+uvicorn project3.main:app --host 127.0.0.1 --port 8002
+
+
+✅ Keuntungan: cuma 1 tunnel yang dijalankan:
+
+cloudflared tunnel run fastapi-laptop

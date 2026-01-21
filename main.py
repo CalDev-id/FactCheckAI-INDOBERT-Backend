@@ -20,6 +20,10 @@ from routers import predict, chat, news, auth, profile
 #hcsp_1_5g
 #http://192.168.50.110:8000/docs
 
+#cloud
+#uvicorn main:app --host 127.0.0.1 --port 8000
+#cloudflared tunnel run fastapi-laptop
+
 app = FastAPI()
 
 @app.get("/")

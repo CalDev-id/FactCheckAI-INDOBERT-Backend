@@ -41,13 +41,24 @@ class LeetCode:
         return arr
         
     def topKFrequent(self, nums: List[int], k: int) -> List[int]:
-        count = {}
+        freq = {}
+        for x in nums:
+            freq[x] = freq.get(x, 0) + 1
+            print(freq)
 
-        for num in nums:
-            count[num] = count.get(num, 0) + 1
+        # 2) buat list pasangan (num, freq)
+        items = list(freq.items())  # contoh: [(1,3), (2,2), (3,1)]
 
-        sorted_items = sorted(count.items(), key=lambda x: x[1], reverse=True)
-        return [num for num, freq in sorted_items[:k]]
+        # 3) bubble sort berdasarkan freq terbesar dulu (descending)
+        n = len(items)
+        for i in range(n):
+            for j in range(0, n - i - 1):
+                if items[j][1] < items[j + 1][1]:  # bandingkan frekuensi
+                    items[j], items[j + 1] = items[j + 1], items[j]
+
+        # 4) ambil k teratas
+        return [num for num, _ in items[:k]]
+
 
 code = LeetCode()
 # print(code.groupAnagrams(["eat","tea","tan","ate","nat","bat"]))
@@ -58,4 +69,7 @@ code = LeetCode()
 # semua_nilai = data_karyawan.values()
 # print(data_karyawan)
 
-print(code.bubbleSort([64, 11, 34, 25, 12, 22, 11, 90]))
+# print(code.bubbleSort([64, 11, 34, 25, 12, 22, 11, 90]))
+
+
+print(10 % 3)
