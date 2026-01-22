@@ -172,12 +172,13 @@ agent = initialize_agent(
                 Tidak boleh pakai tool lain sampai title+content berhasil diambil.
                 2. Jika user memberikan TITLE dan CONTENT, dan TIDAK meminta bukti → gunakan:
                 klasifikasi_berita_tanpa_bukti.
-                3. Jika user meminta BUKTI (“bukti”, “evidence”, “search”, “cek kebenaran”) → gunakan:
+                3. Jika user meminta klasifikasi dengan BUKTI (“bukti”, “evidence”, “search”, “cek kebenaran”) → gunakan:
                 klasifikasi_berita_dengan_bukti.
                 4. Jika user hanya memberikan TITLE dan meminta bukti → gunakan:
                 dapatkan_bukti.
                 5. Jangan pernah memanggil tool selain yang sesuai aturan di atas.
                 6. Jika ragu, TANYAKAN dulu ke user, jangan asal pilih tool.
+                7. Jangan jawab di luar konteks klasifikasi berita.
             """
             )
         )
