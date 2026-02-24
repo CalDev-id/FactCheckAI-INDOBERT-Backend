@@ -58,18 +58,62 @@ class LeetCode:
 
         # 4) ambil k teratas
         return [num for num, _ in items[:k]]
+    
+    def encode(self, strs: List[str]) -> str:
+        res = ""
+        for s in strs:
+            res += str(len(s)) + "#" + s
+        return res
+
+    def decode(self, s: str) -> List[str]:
+        res = []
+        i = 0
+
+        while i < len(s):
+            j = i
+            while s[j] != "#":
+                j += 1
+
+            length = int(s[i:j])
+            word = s[j + 1 : j + 1 + length]
+            res.append(word)
+            i = j + 1 + length
+
+        return res
+
+    def maxProfit(self, prices: List[int]) -> int:
+        max_price = 0
+        topProfit = 0
+
+        for price in reversed(prices):
+            max_price = max(max_price, price)
+            topProfit = max(topProfit, max_price - price)
+            print(max_price, topProfit) 
+
+        return
+    
+    def maxProfit2(self, prices: List[int]) -> int:
+        max_price = 0
+        topProfit = 0
+
+        for price in prices:
+            max_price = max(max_price, price)
+            topProfit = max(topProfit, max_price - price) 
+            print(max_price, topProfit)
+
+        return
 
 
 code = LeetCode()
-# print(code.groupAnagrams(["eat","tea","tan","ate","nat","bat"]))
-# task = code.twoSum([2,7,11,15], 9)
-# print(task)
-
-# data_karyawan = {'nama': 'Budi', 'usia': 30, 'kota': 'Jakarta'}
-# semua_nilai = data_karyawan.values()
-# print(data_karyawan)
-
-# print(code.bubbleSort([64, 11, 34, 25, 12, 22, 11, 90]))
 
 
-print(10 % 3)
+def encode(strs: List[str]) -> str:
+    s = ""
+
+    for i in strs:
+        s += "#" + i
+
+    return s
+
+encoded = encode(["lintang", "dwi", "prasetyo"])
+print(encoded)  # Output: "#lintang#dwi#prasetyo"

@@ -1,17 +1,6 @@
 import json
 from typing import Union
 from fastapi import FastAPI
-from pydantic import BaseModel
-from agents.predict.predict import classify_berita
-from agents.predict.predict import advance_classify_berita
-from agents.get_evidence.google_search import google_search
-from agents.get_evidence.scrape_html import scrape_html
-from agents.explanation.explanation import explanation
-from agents.claim_check.claim_check import claim_check
-from agents.chat.chat import agent
-from auth.supabase_client import supabase
-from typing import List, Any, Optional
-import asyncio
 from routers import predict, chat, news, auth, profile
 
 
