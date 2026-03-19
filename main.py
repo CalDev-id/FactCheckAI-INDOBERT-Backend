@@ -8,6 +8,8 @@ from routers import predict, chat, news, auth, profile
 #uvicorn main:app --host 0.0.0.0 --port 8000
 #hcsp_1_5g
 #http://192.168.50.110:8000/docs
+# rumah
+#http://192.168.1.6:8000/docs
 
 #cloud
 #uvicorn main:app --host 127.0.0.1 --port 8000

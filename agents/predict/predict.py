@@ -36,35 +36,92 @@ def classify_berita(title, content):
     # return {"label": label, "confidence": confidence, "probs": probs.tolist()}
     return {"label": label, "confidence": confidence}
 
-def advance_classify_berita(classification, news_scrape, title, evidence_link, content):
+def advance_classify_berita(claim, classification, news_scrape, title, evidence_link, content):
     gpt_runtime = GPTRunTime()
 
-    system_prompt = """Kamu adalah asisten AI yang menilai apakah suatu berita tergolong hoaks atau valid.
-Gunakan hasil klasifikasi IndoBERT dan hasil scraping berita dari internet sebagai referensi.
-tentukan apakah berita ini hoaks atau valid berdasarkan konteks dan kesesuaian dengan berita referensi.
-output dalam format json dengan key: final_label (hoaks/valid) dan final_confidence (0-100)
-hanya berikan output json saja, tanpa penjelasan tambahan.
-contoh output:
-{"final_label": "hoaks", "final_confidence": 85.5}
+#     system_prompt = """Kamu adalah asisten AI yang menilai apakah suatu berita tergolong hoaks atau valid.
+# Gunakan hasil klasifikasi IndoBERT dan hasil scraping berita dari internet sebagai referensi.
+# tentukan apakah berita ini hoaks atau valid berdasarkan konteks dan kesesuaian dengan berita referensi.
+# output dalam format json dengan key: final_label (hoaks/valid) dan final_confidence (0-100)
+# hanya berikan output json saja, tanpa penjelasan tambahan.
+# contoh output:
+# {"final_label": "hoaks", "final_confidence": 85.5}
+# """
+
+#     user_prompt = f"""
+# Berikut adalah berita yang ingin diklasifikasikan:
+
+# Claim: {claim}
+
+# bukti yang ditemukan di internet terkait claim ini:
+# Judul: {title}
+# content: {content}
+
+# Hasil klasifikasi IndoBERT:
+# {json.dumps(classification, ensure_ascii=False, indent=2)}
+# (kadang hasil klasifikasi bisa salah, jadi tentukan berdasarkan bukti yang ada)
+
+# Link bukti yang ditemukan:
+# {json.dumps(evidence_link, ensure_ascii=False, indent=2)}
+
+# Tentukan apakah berita ini hoaks atau valid berdasarkan konteks dan kesesuaian dengan berita referensi.
+# """
+
+    system_prompt = """
+Kamu adalah asisten AI untuk verifikasi klaim berita berbasis bukti.
+
+Tugas utama:
+1. Pahami inti claim yang diberikan.
+2. Bandingkan claim dengan bukti yang ditemukan dari internet.
+3. Nilai apakah bukti tersebut mendukung, membantah, atau tidak cukup relevan terhadap claim.
+4. Gunakan hasil klasifikasi IndoBERT hanya sebagai sinyal tambahan, bukan sumber kebenaran utama.
+5. Fokus pada kesesuaian fakta antara claim dan bukti, bukan hanya kemiripan kata.
+
+Aturan penilaian:
+- Label "valid" jika bukti internet secara jelas mendukung inti claim.
+- Label "hoaks" jika bukti internet secara jelas membantah claim, atau claim mengandung informasi yang tidak sesuai dengan bukti.
+- Jika bukti lemah, ambigu, tidak relevan, terlalu sedikit, atau saling bertentangan, pilih label yang paling konservatif berdasarkan bukti yang ada.
+- Jangan terlalu bergantung pada satu judul; pertimbangkan isi konten bukti.
+- Jika hasil IndoBERT bertentangan dengan bukti, prioritaskan bukti.
+
+Output wajib:
+- Kembalikan HANYA JSON valid.
+- Jangan menambahkan markdown, komentar, atau teks lain.
+- Gunakan format persis:
+{{"final_label":"hoaks|valid","final_confidence":0-100}}
+
+Aturan confidence:
+- 85-100: bukti sangat kuat dan konsisten
+- 70-84: bukti cukup kuat
+- 50-69: bukti sedang / ada sedikit ambiguitas
+- 0-49: hanya jika tetap terpaksa memilih label meski bukti lemah
+
+Jangan mengarang fakta di luar input yang diberikan.
 """
-
     user_prompt = f"""
-Berikut adalah berita yang ingin diklasifikasikan:
+Verifikasi claim berikut berdasarkan bukti internet yang tersedia.
 
+Claim:
+{claim}
+
+Bukti internet yang ditemukan:
 Judul: {title}
-content: {content}
+Konten: {content}
 
-Hasil klasifikasi IndoBERT:
+Link sumber bukti:
+{json.dumps(evidence_link, ensure_ascii=False)}
+
+Hasil klasifikasi IndoBERT (hanya referensi tambahan, bisa salah):
 {json.dumps(classification, ensure_ascii=False, indent=2)}
-(kadang hasil klasifikasi bisa salah, jadi tentukan berdasarkan bukti yang ada)
 
-Link bukti yang ditemukan:
-{json.dumps(evidence_link, ensure_ascii=False, indent=2)}
+Instruksi:
+- Bandingkan inti claim dengan isi bukti.
+- Tentukan apakah bukti mendukung atau membantah claim.
+- Utamakan isi bukti dibanding hasil IndoBERT.
+- Berikan keputusan akhir dalam JSON saja.
 
-Hasil scraping berita referensi:
-{json.dumps(news_scrape, ensure_ascii=False, indent=2)}
-
-Tentukan apakah berita ini hoaks atau valid berdasarkan konteks dan kesesuaian dengan berita referensi.
+Output:
+{{"final_label":"hoaks|valid","final_confidence":0-100}}
 """
 
     # response = groq_runtime.generate_response(system_prompt, user_prompt)

@@ -19,7 +19,7 @@ def scrape_html(url):
             "wait": "4000"
         }
 
-        response = requests.get(api_url, params=params, timeout=100)
+        response = requests.get(api_url, params=params, timeout=300)
 
         if response.status_code != 200:
             print("ScrapingBee error:", response.text)

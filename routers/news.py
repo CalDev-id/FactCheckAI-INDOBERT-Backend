@@ -14,6 +14,7 @@ class Classification(BaseModel):
     final_confidence: float
 
 class NewsPayload(BaseModel):
+    claim: str
     url: str
     title: str
     content: str

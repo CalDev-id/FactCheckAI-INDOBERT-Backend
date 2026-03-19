@@ -105,85 +105,101 @@ def predict_with_evidence(data: PredictRequest):
 class UrlRequest(BaseModel):
     url: str
     
-@router.post("/predict_from_url/")
-def predict_from_url(data: UrlRequest):
+# @router.post("/predict_from_url/")
+# def predict_from_url(data: UrlRequest):
 
-    # 1. Scrape artikel dari URL input
-    scraped_main = scrape_html(data.url)
-    if not scraped_main or scraped_main.get("content") == "Tidak berhasil ekstrak isi artikel":
-        return {
-            "error": "Gagal mengambil artikel dari URL",
-            "url": data.url
-        }
+#     # 1. Scrape artikel dari URL input
+#     scraped_main = scrape_html(data.url)
+#     if not scraped_main or scraped_main.get("content") == "Tidak berhasil ekstrak isi artikel":
+#         return {
+#             "error": "Gagal mengambil artikel dari URL",
+#             "url": data.url
+#         }
 
-    title = scraped_main.get("judul", "")
-    content = scraped_main.get("content", "")
+#     title = scraped_main.get("judul", "")
+#     content = scraped_main.get("content", "")
 
-    # 2. Klasifikasi IndoBERT
-    classification = classify_berita(title, content)
+#     # 2. Klasifikasi IndoBERT
+#     classification = classify_berita(title, content)
 
-    # 3. Google Search
-    total_results = 10
-    scrape_limit = 1
-    links = google_search(title, total_results=total_results)
+#     # 3. Google Search
+#     total_results = 10
+#     scrape_limit = 1
+#     links = google_search(title, total_results=total_results)
 
-    # 4. Scrape evidence
-    scraped_evidence = []
-    for url in links:  # cek semua link
-        if len(scraped_evidence) >= scrape_limit:
-            break  # sudah cukup evidence
+#     # 4. Scrape evidence
+#     scraped_evidence = []
+#     for url in links:  # cek semua link
+#         if len(scraped_evidence) >= scrape_limit:
+#             break  # sudah cukup evidence
 
-        content = scrape_html(url)
+#         content = scrape_html(url)
 
-        if content is None:
-            print(f"❌ Gagal scrape → {url}")
-            continue  # coba link berikutnya
+#         if content is None:
+#             print(f"❌ Gagal scrape → {url}")
+#             continue  # coba link berikutnya
 
-        print(f"✅ Berhasil scrape → {url}")
-        scraped_evidence.append(content)
+#         print(f"✅ Berhasil scrape → {url}")
+#         scraped_evidence.append(content)
 
-    # 5. Advance Classification
-    advance_classification = advance_classify_berita(
-        classification=classification,
-        news_scrape=scraped_evidence,
-        title=title,
-        evidence_link=links,
-        content=content
-    )
+#     # 5. Advance Classification
+#     advance_classification = advance_classify_berita(
+#         classification=classification,
+#         news_scrape=scraped_evidence,
+#         title=title,
+#         evidence_link=links,
+#         content=content
+#     )
 
-    # 6. LLM judgement
-    llm_output = explanation(
-        classification=advance_classification,
-        news_scrape=scraped_evidence,
-        title=title,
-        evidence_link=links,
-        content=content
-    )
+#     # 6. LLM judgement
+#     llm_output = explanation(
+#         classification=advance_classification,
+#         news_scrape=scraped_evidence,
+#         title=title,
+#         evidence_link=links,
+#         content=content
+#     )
 
-    # 7. Output final
-    return {
-        "url": data.url,
-        "title": title,
-        "content": content,
-        "classification": advance_classification,
-        "evidence_links": links,
-        "evidence_scraped": scraped_evidence,
-        "explanation": llm_output
-    }
+#     # 7. Output final
+#     return {
+#         "url": data.url,
+#         "title": title,
+#         "content": content,
+#         "classification": advance_classification,
+#         "evidence_links": links,
+#         "evidence_scraped": scraped_evidence,
+#         "explanation": llm_output
+#     }
 
     
+import time
+
 @router.post("/predict_from_claim/")
 def predict_from_claim(data: ClaimRequest):
+    total_start = time.perf_counter()
+    print("\n========== START /predict_from_claim/ ==========")
+    print(f"Claim: {data.claim}")
 
     total_results: int = 10
     scrape_limit: int = 1
     query = data.claim
 
+    # 1. Google search
+    step_start = time.perf_counter()
     links = google_search(query, total_results=total_results)
+    print(f"[TIME] google_search: {time.perf_counter() - step_start:.2f}s")
+    print(f"[INFO] total links found: {len(links)}")
 
+    # 2. Claim check
+    step_start = time.perf_counter()
     claim_checked = claim_check(data.claim, links)
+    print(f"[TIME] claim_check: {time.perf_counter() - step_start:.2f}s")
+    print(f"[INFO] claim_check result: {claim_checked}")
 
     if "sesuai" not in claim_checked.lower():
+        total_elapsed = time.perf_counter() - total_start
+        print(f"[TIME] TOTAL (early return): {total_elapsed:.2f}s")
+        print("========== END /predict_from_claim/ ==========\n")
         return {
             "url": "",
             "title": "",
@@ -198,39 +214,92 @@ def predict_from_claim(data: ClaimRequest):
             "explanation": "Claim tidak dapat diverifikasi dengan sumber yang ada: " + claim_checked
         }
 
+    # 3. Scraping
     scraped = []
-    for url in links:
+    scrape_total_start = time.perf_counter()
+
+    for i, url in enumerate(links, start=1):
         if len(scraped) >= scrape_limit:
             break
+
+        step_start = time.perf_counter()
         content = scrape_html(url)
+        elapsed = time.perf_counter() - step_start
+
         if content is None:
-            print(f"❌ Gagal scrape → {url}")
+            print(f"[TIME] scrape_html #{i}: {elapsed:.2f}s → FAILED → {url}")
             continue
-        print(f"✅ Berhasil scrape → {url}")
-        scraped.append(content)
 
-    classification = classify_berita(scraped[0].get("judul", ""), scraped[0].get("content", ""))
+        print(f"[TIME] scrape_html #{i}: {elapsed:.2f}s → SUCCESS → {url}")
+        scraped.append({
+            "url": url,
+            **content
+        })
 
+    print(f"[TIME] scraping total: {time.perf_counter() - scrape_total_start:.2f}s")
+    print(f"[INFO] total scraped success: {len(scraped)}")
+
+    if not scraped:
+        total_elapsed = time.perf_counter() - total_start
+        print(f"[TIME] TOTAL (no scraped evidence): {total_elapsed:.2f}s")
+        print("========== END /predict_from_claim/ ==========\n")
+        return {
+            "claim": data.claim,
+            "url": "",
+            "title": "",
+            "content": "",
+            "classification": {
+                "final_label": "unknown",
+                "final_confidence": 0,
+                "error": "Tidak ada evidence yang berhasil di-scrape"
+            },
+            "evidence_links": links,
+            "evidence_scraped": [],
+            "explanation": "Claim tidak dapat diverifikasi karena tidak ada bukti yang berhasil di-scrape."
+        }
+
+    first_scraped = scraped[0]
+    first_title = first_scraped.get("judul", "")
+    first_content = first_scraped.get("content", "")
+
+    # 4. Classify berita
+    step_start = time.perf_counter()
+    classification = classify_berita(first_title, first_content)
+    print(f"[TIME] classify_berita: {time.perf_counter() - step_start:.2f}s")
+
+    # 5. Advanced classification
+    step_start = time.perf_counter()
     advance_classification = advance_classify_berita(
+        claim=data.claim,
         classification=classification,
         news_scrape=scraped,
-        title=scraped[0].get("judul", ""),
+        title=first_title,
         evidence_link=links,
-        content=scraped[0].get("content", "")
+        content=first_content
     )
+    print(f"[TIME] advance_classify_berita: {time.perf_counter() - step_start:.2f}s")
 
+    # 6. Explanation
+    step_start = time.perf_counter()
     llm_output = explanation(
+        claim=data.claim,
         classification=advance_classification,
         news_scrape=scraped,
-        title=scraped[0].get("judul", ""),
+        title=first_title,
         evidence_link=links,
-        content=scraped[0].get("content", "")
+        content=first_content
     )
+    print(f"[TIME] explanation: {time.perf_counter() - step_start:.2f}s")
+
+    total_elapsed = time.perf_counter() - total_start
+    print(f"[TIME] TOTAL: {total_elapsed:.2f}s")
+    print("========== END /predict_from_claim/ ==========\n")
 
     return {
-        "url": links[0] if links else "",
-        "title": scraped[0].get("judul", "") if scraped else "",
-        "content": scraped[0].get("content", "") if scraped else "",
+        "claim": data.claim,
+        "url": first_scraped.get("url", ""),
+        "title": first_title,
+        "content": first_content,
         "classification": advance_classification,
         "evidence_links": links,
         "evidence_scraped": scraped,
