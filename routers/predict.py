@@ -1,12 +1,15 @@
 import asyncio
 from fastapi import APIRouter
 # from schemas.predict import PredictRequest, ClaimRequest, UrlRequest
+from agents.links_ranking.links_ranking import extract_title_from_url
 from agents.predict.predict import classify_berita, advance_classify_berita
 from agents.get_evidence.google_search import google_search
 from agents.get_evidence.scrape_html import scrape_html
 from agents.explanation.explanation import explanation
-from agents.claim_check.claim_check import claim_check
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.metrics.pairwise import cosine_similarity
 from pydantic import BaseModel
+from urllib.parse import urlparse
 
 router = APIRouter(tags=["Prediction"])
 
@@ -173,7 +176,6 @@ class UrlRequest(BaseModel):
 
     
 import time
-
 @router.post("/predict_from_claim/")
 def predict_from_claim(data: ClaimRequest):
     total_start = time.perf_counter()
@@ -181,68 +183,51 @@ def predict_from_claim(data: ClaimRequest):
     print(f"Claim: {data.claim}")
 
     total_results: int = 10
-    scrape_limit: int = 1
+    scrape_limit: int = 2
     query = data.claim
 
     # 1. Google search
     step_start = time.perf_counter()
     links = google_search(query, total_results=total_results)
     print(f"[TIME] google_search: {time.perf_counter() - step_start:.2f}s")
-    print(f"[INFO] total links found: {len(links)}")
 
-    # 2. Claim check
+    # 2. Cosine similarity
     step_start = time.perf_counter()
-    claim_checked = claim_check(data.claim, links)
-    print(f"[TIME] claim_check: {time.perf_counter() - step_start:.2f}s")
-    print(f"[INFO] claim_check result: {claim_checked}")
 
-    if "sesuai" not in claim_checked.lower():
-        total_elapsed = time.perf_counter() - total_start
-        print(f"[TIME] TOTAL (early return): {total_elapsed:.2f}s")
-        print("========== END /predict_from_claim/ ==========\n")
-        return {
-            "url": "",
-            "title": "",
-            "content": "",
-            "classification": {
-                "final_label": "unknown",
-                "final_confidence": 0,
-                "error": "Claim tidak dapat diverifikasi dengan sumber yang ada: " + claim_checked
-            },
-            "evidence_links": links,
-            "evidence_scraped": [],
-            "explanation": "Claim tidak dapat diverifikasi dengan sumber yang ada: " + claim_checked
-        }
+    raw_titles = [extract_title_from_url(url) for url in links]
+    documents = [query] + raw_titles
 
-    # 3. Scraping
+    vectorizer = TfidfVectorizer()
+    tfidf_matrix = vectorizer.fit_transform(documents)
+    similarities = cosine_similarity(tfidf_matrix[0:1], tfidf_matrix[1:]).flatten()
+
+    ranked_results = list(zip(links, raw_titles, similarities))
+    ranked_results.sort(key=lambda x: x[2], reverse=True)
+
+    sorted_links = [item[0] for item in ranked_results]
+
+    print(f"[TIME] cosine_similarity: {time.perf_counter() - step_start:.2f}s")
+
+    # 3. Scraping berita
     scraped = []
     scrape_total_start = time.perf_counter()
 
-    for i, url in enumerate(links, start=1):
+    for url in sorted_links:
         if len(scraped) >= scrape_limit:
             break
 
-        step_start = time.perf_counter()
         content = scrape_html(url)
-        elapsed = time.perf_counter() - step_start
-
         if content is None:
-            print(f"[TIME] scrape_html #{i}: {elapsed:.2f}s → FAILED → {url}")
             continue
 
-        print(f"[TIME] scrape_html #{i}: {elapsed:.2f}s → SUCCESS → {url}")
         scraped.append({
             "url": url,
             **content
         })
 
     print(f"[TIME] scraping total: {time.perf_counter() - scrape_total_start:.2f}s")
-    print(f"[INFO] total scraped success: {len(scraped)}")
 
     if not scraped:
-        total_elapsed = time.perf_counter() - total_start
-        print(f"[TIME] TOTAL (no scraped evidence): {total_elapsed:.2f}s")
-        print("========== END /predict_from_claim/ ==========\n")
         return {
             "claim": data.claim,
             "url": "",
@@ -250,61 +235,232 @@ def predict_from_claim(data: ClaimRequest):
             "content": "",
             "classification": {
                 "final_label": "unknown",
-                "final_confidence": 0,
-                "error": "Tidak ada evidence yang berhasil di-scrape"
+                "final_confidence": 0
             },
-            "evidence_links": links,
+            "evidence_links": sorted_links,
             "evidence_scraped": [],
-            "explanation": "Claim tidak dapat diverifikasi karena tidak ada bukti yang berhasil di-scrape."
+            "explanation": "Tidak ada evidence yang berhasil di-scrape"
         }
 
+    # 4. Format titles (judul + sumber)
+    titles = []
+    for url in sorted_links:
+        title = extract_title_from_url(url)
+        domain = urlparse(url).netloc.replace("www.", "")
+        source = domain.split(".")[0]
+        titles.append(f"{title} (sumber:{source})")
+    #PRINT
+    for i, title in enumerate(titles, 1):
+        print(f"{i}. {title}")
+
+    # 5. Classify berita
     first_scraped = scraped[0]
     first_title = first_scraped.get("judul", "")
     first_content = first_scraped.get("content", "")
 
-    # 4. Classify berita
     step_start = time.perf_counter()
     classification = classify_berita(first_title, first_content)
     print(f"[TIME] classify_berita: {time.perf_counter() - step_start:.2f}s")
 
-    # 5. Advanced classification
+    # 6. Advanced classify (FINAL)
     step_start = time.perf_counter()
-    advance_classification = advance_classify_berita(
+    news_list = [
+    {
+        "title": item.get("judul", ""),
+        "content": item.get("content", "")
+    }
+    for item in scraped
+    ]
+    advance_result = advance_classify_berita(
         claim=data.claim,
         classification=classification,
-        news_scrape=scraped,
-        title=first_title,
-        evidence_link=links,
-        content=first_content
+        titles=titles,
+        news_list=news_list
     )
     print(f"[TIME] advance_classify_berita: {time.perf_counter() - step_start:.2f}s")
 
-    # 6. Explanation
-    step_start = time.perf_counter()
-    llm_output = explanation(
-        claim=data.claim,
-        classification=advance_classification,
-        news_scrape=scraped,
-        title=first_title,
-        evidence_link=links,
-        content=first_content
-    )
-    print(f"[TIME] explanation: {time.perf_counter() - step_start:.2f}s")
+    # 7. Split output
+    final_label = advance_result.get("final_label", "unknown")
+    final_confidence = advance_result.get("final_confidence", 0)
+    llm_output = advance_result.get("explanation", "")
 
     total_elapsed = time.perf_counter() - total_start
     print(f"[TIME] TOTAL: {total_elapsed:.2f}s")
     print("========== END /predict_from_claim/ ==========\n")
 
+
+    # DEBUG
+    print("\n========== DEBUG RECAP ==========")
+
+    print(f"Claim: {data.claim}")
+
+    print(f"[TIME] google_search: (lihat log atas)")
+    print(f"[TIME] cosine_similarity: (lihat log atas)")
+    print("[INFO] Cosine Similarity Top Results:")
+    for i, (url, title, score) in enumerate(ranked_results[:5], 1):
+        print(f"{i}. {score:.4f} | {title}")
+
+    print(f"[TIME] scraping total: (lihat log atas)")
+    print(f"[INFO] total scraped: {len(scraped)}")
+
+    print(f"[TIME] classify_berita: (lihat log atas)")
+    print(f"[INFO] label: {classification.get('label')} | confidence: {classification.get('confidence')}")
+
+    print(f"[TIME] advance_classify_berita: (lihat log atas)")
+    print(f"[INFO] final_label: {final_label} | confidence: {final_confidence}")
+
+    print(f"[TIME] TOTAL: {total_elapsed:.2f}s")
+
+    print("========== END DEBUG ==========\n")
     return {
         "claim": data.claim,
         "url": first_scraped.get("url", ""),
         "title": first_title,
         "content": first_content,
-        "classification": advance_classification,
-        "evidence_links": links,
+        "classification": {
+            "final_label": final_label,
+            "final_confidence": final_confidence
+        },
+        "evidence_links": sorted_links,
         "evidence_scraped": scraped,
         "explanation": llm_output
     }
+# @router.post("/predict_from_claim/")
+# def predict_from_claim(data: ClaimRequest):
+#     total_start = time.perf_counter()
+#     print("\n========== START /predict_from_claim/ ==========")
+#     print(f"Claim: {data.claim}")
+
+#     total_results: int = 10
+#     scrape_limit: int = 2
+#     query = data.claim
+
+#     # 1. Google search
+#     step_start = time.perf_counter()
+#     links = google_search(query, total_results=total_results)
+#     print(f"[TIME] google_search: {time.perf_counter() - step_start:.2f}s")
+#     print(f"[INFO] total links found: {len(links)}")
+
+#     # 2. Check similarity claim dengan link hasil google search
+#     step_start = time.perf_counter()
+
+#     titles = [extract_title_from_url(url) for url in links]
+
+#     # Gabungkan claim + titles
+#     documents = [query] + titles
+
+#     vectorizer = TfidfVectorizer()
+#     tfidf_matrix = vectorizer.fit_transform(documents)
+
+#     # Hitung cosine similarity (claim vs semua title)
+#     similarities = cosine_similarity(tfidf_matrix[0:1], tfidf_matrix[1:]).flatten()
+
+#     # Gabungkan hasil
+#     ranked_results = list(zip(links, titles, similarities))
+
+#     # Urutkan dari similarity tertinggi
+#     ranked_results.sort(key=lambda x: x[2], reverse=True)
+
+#     # Ambil hanya link (urutan sudah sorted)
+#     sorted_links = [item[0] for item in ranked_results]
+
+#     print(f"[TIME] cosine_similarity: {time.perf_counter() - step_start:.2f}s")
+
+#     # OPTIONAL: debug print
+#     for i, (url, title, score) in enumerate(ranked_results, 1):
+#         print(f"{i}. {score:.4f} | {title}")
+
+#     # 3. Scraping
+#     scraped = []
+#     scrape_total_start = time.perf_counter()
+
+#     for i, url in enumerate(sorted_links, start=1):
+#         if len(scraped) >= scrape_limit:
+#             break
+
+#         step_start = time.perf_counter()
+#         content = scrape_html(url)
+#         elapsed = time.perf_counter() - step_start
+
+#         if content is None:
+#             print(f"[TIME] scrape_html #{i}: {elapsed:.2f}s → FAILED → {url}")
+#             continue
+
+#         print(f"[TIME] scrape_html #{i}: {elapsed:.2f}s → SUCCESS → {url}")
+#         scraped.append({
+#             "url": url,
+#             **content
+#         })
+
+#     print(f"[TIME] scraping total: {time.perf_counter() - scrape_total_start:.2f}s")
+#     print(f"[INFO] total scraped success: {len(scraped)}")
+
+#     if not scraped:
+#         total_elapsed = time.perf_counter() - total_start
+#         print(f"[TIME] TOTAL (no scraped evidence): {total_elapsed:.2f}s")
+#         print("========== END /predict_from_claim/ ==========\n")
+#         return {
+#             "claim": data.claim,
+#             "url": "",
+#             "title": "",
+#             "content": "",
+#             "classification": {
+#                 "final_label": "unknown",
+#                 "final_confidence": 0,
+#                 "error": "Tidak ada evidence yang berhasil di-scrape"
+#             },
+#             "evidence_links": sorted_links,
+#             "evidence_scraped": [],
+#             "explanation": "Claim tidak dapat diverifikasi karena tidak ada bukti yang berhasil di-scrape."
+#         }
+
+#     first_scraped = scraped[0]
+#     first_title = first_scraped.get("judul", "")
+#     first_content = first_scraped.get("content", "")
+
+#     # 4. Classify berita
+#     step_start = time.perf_counter()
+#     classification = classify_berita(first_title, first_content)
+#     print(f"[TIME] classify_berita: {time.perf_counter() - step_start:.2f}s")
+
+#     # 5. Advanced classification
+#     step_start = time.perf_counter()
+#     advance_classification = advance_classify_berita(
+#         claim=data.claim,
+#         classification=classification,
+#         news_scrape=scraped,
+#         title=first_title,
+#         evidence_link=sorted_links,
+#         content=first_content
+#     )
+#     print(f"[TIME] advance_classify_berita: {time.perf_counter() - step_start:.2f}s")
+
+#     # 6. Explanation
+#     step_start = time.perf_counter()
+#     llm_output = explanation(
+#         claim=data.claim,
+#         classification=advance_classification,
+#         news_scrape=scraped,
+#         title=first_title,
+#         evidence_link=sorted_links,
+#         content=first_content
+#     )
+#     print(f"[TIME] explanation: {time.perf_counter() - step_start:.2f}s")
+
+#     total_elapsed = time.perf_counter() - total_start
+#     print(f"[TIME] TOTAL: {total_elapsed:.2f}s")
+#     print("========== END /predict_from_claim/ ==========\n")
+
+#     return {
+#         "claim": data.claim,
+#         "url": first_scraped.get("url", ""),
+#         "title": first_title,
+#         "content": first_content,
+#         "classification": advance_classification,
+#         "evidence_links": sorted_links,
+#         "evidence_scraped": scraped,
+#         "explanation": llm_output
+#     }
 
 @router.post("/predict_test/")
 async def predict_test(data: UrlRequest):

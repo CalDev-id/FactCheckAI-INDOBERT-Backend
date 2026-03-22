@@ -18,8 +18,8 @@ SOCIAL_MEDIA_DOMAINS = [
     "x.com",
     "threads.net",
     "youtube.com",
-    "youtu.be"
-    "kaggle.com"
+    "youtu.be",
+    "kaggle.com",
     "huggingface.co"
 ]
 
