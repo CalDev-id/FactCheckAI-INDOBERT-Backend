@@ -4,7 +4,7 @@ import os
 from auth.supabase_client import supabase
 from fastapi import HTTPException
 from uuid import UUID
-from routers.auth import get_current_user
+from routers.auth import get_current_user, get_profile_role, get_user_profile
 from typing import List, Optional
 
 router = APIRouter(tags=["News"])
@@ -22,6 +22,14 @@ class NewsPayload(BaseModel):
     evidence_links: Optional[List[str]] = None
     evidence_scraped: Optional[list] = None
     explanation: Optional[str] = None
+
+def require_admin(user=Depends(get_current_user)):
+    profile = get_user_profile(user.id)
+
+    if get_profile_role(profile) != "admin":
+        raise HTTPException(status_code=403, detail="Admin access required")
+
+    return user
 
 @router.get("/news")
 def get_news():
@@ -114,6 +122,42 @@ def get_my_news(user=Depends(get_current_user)):
         raise HTTPException(status_code=500, detail=str(res.error))
 
     return res.data
+
+@router.get("/news/admin")
+def get_admin_news(user=Depends(require_admin)):
+    res = (
+        supabase
+        .table("news")
+        .select("*")
+        .order("inserted_at", desc=True)
+        .execute()
+    )
+
+    if getattr(res, "error", None):
+        print("SUPABASE ERROR:", res.error)
+        raise HTTPException(status_code=500, detail=str(res.error))
+
+    return res.data
+
+
+@router.delete("/news/admin/{news_id}")
+def delete_admin_news(news_id: UUID, user=Depends(require_admin)):
+    res = (
+        supabase
+        .table("news")
+        .delete()
+        .eq("id", str(news_id))
+        .execute()
+    )
+
+    if getattr(res, "error", None):
+        print("SUPABASE ERROR:", res.error)
+        raise HTTPException(status_code=500, detail=str(res.error))
+
+    if not res.data:
+        raise HTTPException(status_code=404, detail="News not found")
+
+    return {"message": "News deleted"}
 
 @router.delete("/news/my/{news_id}")
 def delete_my_news(news_id: UUID, user=Depends(get_current_user)):

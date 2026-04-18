@@ -7,6 +7,25 @@ from fastapi import Depends
 
 router = APIRouter(tags=["Auth"])
 
+def get_user_profile(user_id: str):
+    try:
+        profile = (
+            supabase
+            .table("profiles")
+            .select("name, avatar_url, role")
+            .eq("id", user_id)
+            .single()
+            .execute()
+        )
+
+        return profile.data or {}
+    except Exception:
+        return {}
+
+
+def get_profile_role(profile: dict):
+    return profile.get("role") or "user"
+
 def get_current_user(
     authorization: Optional[str] = Header(None, alias="Authorization")
 ):
@@ -109,32 +128,29 @@ def login(payload: LoginRequest):
             detail="Login failed: no active session returned. Check email confirmation status in Supabase Auth."
         )
 
+    profile = get_user_profile(response.user.id)
+
     return {
         "access_token": response.session.access_token,
         "refresh_token": response.session.refresh_token,
         "user": {
             "id": response.user.id,
-            "email": response.user.email
+            "email": response.user.email,
+            "role": get_profile_role(profile)
         }
     }
 
 
 @router.get("/auth/me")
 def get_me(user=Depends(get_current_user)):
-    profile = (
-        supabase
-        .table("profiles")
-        .select("name, avatar_url")
-        .eq("id", user.id)
-        .single()
-        .execute()
-    )
+    profile = get_user_profile(user.id)
 
     return {
         "id": user.id,
         "email": user.email,
-        "name": profile.data.get("name"),
-        "avatar_url": profile.data.get("avatar_url")
+        "name": profile.get("name"),
+        "avatar_url": profile.get("avatar_url"),
+        "role": get_profile_role(profile)
     }
 
 from pydantic import BaseModel
