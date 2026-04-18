@@ -91,10 +91,22 @@ def login(payload: LoginRequest):
             status_code=401,
             detail=e.message
         )
-    except Exception:
+    except Exception as e:
         raise HTTPException(
             status_code=500,
-            detail="Internal authentication error"
+            detail=f"Internal authentication error: {str(e)}"
+        )
+
+    if response.user is None:
+        raise HTTPException(
+            status_code=401,
+            detail="Login failed: user not found"
+        )
+
+    if response.session is None:
+        raise HTTPException(
+            status_code=401,
+            detail="Login failed: no active session returned. Check email confirmation status in Supabase Auth."
         )
 
     return {
