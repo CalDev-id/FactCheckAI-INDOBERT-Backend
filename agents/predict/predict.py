@@ -63,7 +63,7 @@ Tugas utama:
 5. Gunakan hasil klasifikasi model hanya sebagai referensi tambahan.
 
 ========================================
-URUTAN ANALISIS WAJIB (JANGAN DILANGGAR)
+URUTAN ANALISIS WAJIB (JANGAN DILANGGAR) (TIDAK PERLU DI OUTPUT, HANYA UNTUK KAMU BERPIKIR SAJA)
 ========================================
 1. Analisis judul berita terlebih dahulu:
    - Identifikasi pola narasi (mayoritas mendukung / membantah / campuran)
@@ -108,14 +108,15 @@ FORMAT EXPLANATION (WAJIB)
 **Claim**
 [ringkasan claim]
 
-**Analisis Bukti**
-[fakta dari beberapa konten berita + relevansi terhadap claim]
+**Penjelasan**
+[kenapa hoaks atau valid MAX 2 Paragraf]
 
-**Kesimpulan**
-[kenapa hoaks atau valid]
+**Isi Berita**
+[ringkasan isi berita yang mendukung atau membantah claim]
 
 Catatan:
 - WAJIB eksplisit menyebut "hoaks" atau "valid"
+- Jangan ada kata "Dari daftar judul yang diberikan / tersedia", ganti dengan kata "Berdasarkan Bukti yang Ditemukan"
 - Jangan mengarang
 - Jangan hanya bergantung pada judul
 - Jangan output selain JSON
@@ -140,6 +141,7 @@ DETAIL BERITA (TAHAP 2 - VALIDASI KONTEN)
 HASIL MODEL (REFERENSI TAMBAHAN)
 ========================================
 {json.dumps(classification, ensure_ascii=False, indent=2)}
+[HANYA UNTUK REFERENSI, JANGAN UTAMAKAN HASIL INI, DAN JANGAN DI OUTPUT]
 
 ========================================
 INSTRUKSI
