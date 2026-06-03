@@ -1,4 +1,6 @@
 import asyncio
+from collections import Counter
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from fastapi import APIRouter
 # from schemas.predict import PredictRequest, ClaimRequest, UrlRequest
 from agents.links_ranking.links_ranking import extract_title_from_url
@@ -175,6 +177,125 @@ class UrlRequest(BaseModel):
 #     }
 
     
+def scrape_with_fallback(url):
+    content = scrape_html(url, render_js=False, wait=0)
+    if content is not None:
+        return {
+            "url": url,
+            "scrape_mode": "no_js",
+            **content
+        }
+
+    print(f"⚠️ Fallback render_js=true → {url}")
+    content = scrape_html(url, render_js=True, wait=4000)
+    if content is None:
+        return None
+
+    return {
+        "url": url,
+        "scrape_mode": "js_fallback",
+        **content
+    }
+
+
+def scrape_parallel_with_fallback(urls, scrape_limit=2, max_workers=4):
+    scraped = []
+    seen_urls = set()
+    executor = ThreadPoolExecutor(max_workers=max_workers)
+    future_to_url = {
+        executor.submit(scrape_with_fallback, url): url
+        for url in urls
+    }
+
+    try:
+        for future in as_completed(future_to_url):
+            url = future_to_url[future]
+            if len(scraped) >= scrape_limit:
+                break
+
+            try:
+                content = future.result()
+            except Exception as e:
+                print(f"⚠️ Gagal scrape paralel {url}: {e}")
+                continue
+
+            if content is None:
+                print(f"❌ Gagal scrape → {url}")
+                continue
+
+            if url in seen_urls:
+                continue
+
+            seen_urls.add(url)
+            print(f"✅ Berhasil scrape ({content.get('scrape_mode')}) → {url}")
+            scraped.append(content)
+    finally:
+        for future in future_to_url:
+            if not future.done():
+                future.cancel()
+        executor.shutdown(wait=False, cancel_futures=True)
+
+    return scraped[:scrape_limit]
+
+
+def trim_news_for_llm(scraped, max_chars=2500):
+    news_list = []
+    for item in scraped:
+        content = item.get("content", "")
+        if len(content) > max_chars:
+            content = content[:max_chars].rsplit(" ", 1)[0] + "..."
+
+        news_list.append({
+            "title": item.get("judul", ""),
+            "source": item.get("sumber", ""),
+            "tanggal": item.get("tanggal", ""),
+            "content": content
+        })
+
+    return news_list
+
+
+def classify_evidence_list(scraped):
+    results = []
+    for index, item in enumerate(scraped, 1):
+        title = item.get("judul", "")
+        content = item.get("content", "")
+        result = classify_berita(title, content)
+        results.append({
+            "index": index,
+            "url": item.get("url", item.get("link", "")),
+            "title": title,
+            **result
+        })
+
+    return results
+
+
+def aggregate_classifications(evidence_classifications):
+    if not evidence_classifications:
+        return {
+            "label": "unknown",
+            "average_confidence": 0,
+            "evidence_count": 0,
+            "label_counts": {}
+        }
+
+    labels = [item.get("label", "unknown") for item in evidence_classifications]
+    label_counts = Counter(labels)
+    majority_label = label_counts.most_common(1)[0][0]
+    avg_confidence = sum(
+        item.get("confidence", 0)
+        for item in evidence_classifications
+    ) / len(evidence_classifications)
+
+    return {
+        "label": majority_label,
+        "average_confidence": round(avg_confidence, 2),
+        "evidence_count": len(evidence_classifications),
+        "label_counts": dict(label_counts)
+    }
+
+
 import time
 @router.post("/predict_from_claim/")
 def predict_from_claim(data: ClaimRequest):
@@ -188,46 +309,80 @@ def predict_from_claim(data: ClaimRequest):
 
     # 1. Google search
     step_start = time.perf_counter()
-    links = google_search(query, total_results=total_results)
+    search_results = google_search(
+        query,
+        total_results=total_results,
+        return_metadata=True
+    )
     print(f"[TIME] google_search: {time.perf_counter() - step_start:.2f}s")
 
     # 2. Cosine similarity
     step_start = time.perf_counter()
 
-    raw_titles = [extract_title_from_url(url) for url in links]
-    documents = [query] + raw_titles
+    search_documents = [
+        f"{item.get('title', '')} {item.get('snippet', '')}".strip()
+        for item in search_results
+    ]
 
-    vectorizer = TfidfVectorizer()
-    tfidf_matrix = vectorizer.fit_transform(documents)
-    similarities = cosine_similarity(tfidf_matrix[0:1], tfidf_matrix[1:]).flatten()
+    non_empty_results = [
+        (item, document)
+        for item, document in zip(search_results, search_documents)
+        if document
+    ]
 
-    ranked_results = list(zip(links, raw_titles, similarities))
-    ranked_results.sort(key=lambda x: x[2], reverse=True)
+    min_similarity = 0.05
+    if non_empty_results:
+        vectorizer = TfidfVectorizer()
+        documents = [query] + [document for _, document in non_empty_results]
+        tfidf_matrix = vectorizer.fit_transform(documents)
+        similarities = cosine_similarity(tfidf_matrix[0:1], tfidf_matrix[1:]).flatten()
+
+        ranked_results = []
+        for (item, document), score in zip(non_empty_results, similarities):
+            if score < min_similarity:
+                continue
+
+            url = item.get("link", "")
+            title = item.get("title", "") or extract_title_from_url(url)
+            snippet = item.get("snippet", "")
+            ranked_results.append((url, title, score, snippet))
+
+        ranked_results.sort(key=lambda x: x[2], reverse=True)
+    else:
+        ranked_results = []
+
+    if not ranked_results:
+        print("⚠️ Tidak ada kandidat lolos threshold, fallback ke hasil Google berisi metadata.")
+        ranked_results = [
+            (
+                item.get("link", ""),
+                item.get("title", "") or extract_title_from_url(item.get("link", "")),
+                0,
+                item.get("snippet", "")
+            )
+            for item in search_results
+            if item.get("link") and (
+                item.get("title", "") or item.get("snippet", "")
+            )
+        ]
 
     sorted_links = [item[0] for item in ranked_results]
 
     print(f"[TIME] cosine_similarity: {time.perf_counter() - step_start:.2f}s")
 
     # 3. Scraping berita
-    scraped = []
     scrape_total_start = time.perf_counter()
-
-    for url in sorted_links:
-        if len(scraped) >= scrape_limit:
-            break
-
-        content = scrape_html(url)
-        if content is None:
-            continue
-
-        scraped.append({
-            "url": url,
-            **content
-        })
-
+    scraped = scrape_parallel_with_fallback(
+        sorted_links,
+        scrape_limit=scrape_limit,
+        max_workers=4
+    )
+    link_rank = {url: index for index, url in enumerate(sorted_links)}
+    scraped.sort(key=lambda item: link_rank.get(item.get("url"), len(sorted_links)))
     print(f"[TIME] scraping total: {time.perf_counter() - scrape_total_start:.2f}s")
 
     if not scraped:
+        classification_reference = aggregate_classifications([])
         return {
             "claim": data.claim,
             "url": "",
@@ -239,13 +394,14 @@ def predict_from_claim(data: ClaimRequest):
             },
             "evidence_links": sorted_links,
             "evidence_scraped": [],
+            "evidence_classifications": [],
+            "classification_reference": classification_reference,
             "explanation": "Tidak ada evidence yang berhasil di-scrape"
         }
 
     # 4. Format titles (judul + sumber)
     titles = []
-    for url in sorted_links:
-        title = extract_title_from_url(url)
+    for url, title, score, snippet in ranked_results:
         domain = urlparse(url).netloc.replace("www.", "")
         source = domain.split(".")[0]
         titles.append(f"{title} (sumber:{source})")
@@ -253,27 +409,22 @@ def predict_from_claim(data: ClaimRequest):
     for i, title in enumerate(titles, 1):
         print(f"{i}. {title}")
 
-    # 5. Classify berita
+    # 5. Classify semua evidence
     first_scraped = scraped[0]
     first_title = first_scraped.get("judul", "")
     first_content = first_scraped.get("content", "")
 
     step_start = time.perf_counter()
-    classification = classify_berita(first_title, first_content)
+    evidence_classifications = classify_evidence_list(scraped)
+    classification_reference = aggregate_classifications(evidence_classifications)
     print(f"[TIME] classify_berita: {time.perf_counter() - step_start:.2f}s")
 
     # 6. Advanced classify (FINAL)
     step_start = time.perf_counter()
-    news_list = [
-    {
-        "title": item.get("judul", ""),
-        "content": item.get("content", "")
-    }
-    for item in scraped
-    ]
+    news_list = trim_news_for_llm(scraped, max_chars=2500)
     advance_result = advance_classify_berita(
         claim=data.claim,
-        classification=classification,
+        classification=classification_reference,
         titles=titles,
         news_list=news_list
     )
@@ -297,14 +448,15 @@ def predict_from_claim(data: ClaimRequest):
     print(f"[TIME] google_search: (lihat log atas)")
     print(f"[TIME] cosine_similarity: (lihat log atas)")
     print("[INFO] Cosine Similarity Top Results:")
-    for i, (url, title, score) in enumerate(ranked_results[:5], 1):
+    for i, (url, title, score, snippet) in enumerate(ranked_results[:5], 1):
         print(f"{i}. {score:.4f} | {title}")
 
     print(f"[TIME] scraping total: (lihat log atas)")
     print(f"[INFO] total scraped: {len(scraped)}")
 
     print(f"[TIME] classify_berita: (lihat log atas)")
-    print(f"[INFO] label: {classification.get('label')} | confidence: {classification.get('confidence')}")
+    print(f"[INFO] evidence classifications: {evidence_classifications}")
+    print(f"[INFO] classification reference: {classification_reference}")
 
     print(f"[TIME] advance_classify_berita: (lihat log atas)")
     print(f"[INFO] final_label: {final_label} | confidence: {final_confidence}")
@@ -323,6 +475,8 @@ def predict_from_claim(data: ClaimRequest):
         },
         "evidence_links": sorted_links,
         "evidence_scraped": scraped,
+        "evidence_classifications": evidence_classifications,
+        "classification_reference": classification_reference,
         "explanation": llm_output
     }
 # @router.post("/predict_from_claim/")
@@ -498,4 +652,3 @@ async def predict_test(data: UrlRequest):
   ],
   "explanation": "Kesimpulan: Valid (bukan hoaks)\n\nAlasan singkat:\n- Klaim didukung oleh liputan media arus utama (mis. Liputan6) yang merujuk pada publikasi ilmiah (jurnal Antiquity) dan nama peneliti nyata (Angela Lieverse). Hasil scraping menunjukkan artikel Liputan6 yang mengutip Antiquity (13/2/2015) tentang kerangka seorang ibu dan janin kembar berusia sekitar 7.700 tahun dari Siberia.\n- Adanya rujukan ke jurnal/publikasi akademik (Antiquity) menjadikan klaim ini berdasar pada temuan arkeologis/osteologis, bukan sekadar desas-desus.\n- Beberapa tautan dalam daftar bukti tidak relevan atau salah konteks (mis. detik.com yang tampak tidak terkait, Scribd, lemon8, dll), namun itu tidak menghapus bukti utama dari laporan akademik dan liputan media.\n\nCatatan penting / keterbatasan:\n- Interpretasi fosil selalu dapat diperdebatkan dalam komunitas ilmiah; klaim “tertua di dunia” bergantung pada penafsiran data dan perbandingan dengan temuan lain. Namun, berdasarkan sumber yang ada, klaim bahwa ditemukan bukti kembar purba tersebut adalah sah dan dilaporkan secara ilmiah.\n- Jika ingin membagikan berita ini, disarankan menyertakan referensi ke publikasi asli (Antiquity) atau sumber akademik untuk konteks lebih lengkap.\n\nKepercayaan penilaian: sekitar 80% (sejalan dengan hasil model IndoBERT yang diberikan: \"valid\" 78.5%)."
     }
-

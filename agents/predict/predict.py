@@ -46,9 +46,6 @@ def advance_classify_berita(claim, classification, titles, news_list):
 
     gpt_runtime = GPTRunTime()
 
-    # 🔹 Extract title list dulu (buat prioritas awal LLM)
-    titles = [news["title"] for news in news_list]
-
     system_prompt = """
 Kamu adalah asisten AI untuk verifikasi klaim berita berbasis bukti dari internet.
 
@@ -89,6 +86,12 @@ Jika bukti:
 - ambigu
 - tidak cukup
 → pilih kesimpulan paling konservatif
+
+Aturan confidence:
+- 80-90 → bukti kuat, relevan, dan konsisten.
+- 65-79 → bukti cukup kuat, tetapi hanya berasal dari 1-2 sumber atau masih ada sedikit ambiguitas.
+- 0-64 → bukti lemah, ambigu, tidak cukup relevan, atau konteks claim belum lengkap.
+- Jika hasil model bertentangan dengan bukti, kamu boleh override hasil model, tetapi explanation harus menjelaskan alasan berbasis bukti.
 
 ========================================
 FORMAT OUTPUT (WAJIB JSON)
@@ -162,6 +165,8 @@ WAJIB IKUTI URUTAN INI:
    - Cocok / tidak cocok?
 
 4. Gunakan hasil model hanya sebagai referensi tambahan
+   - Jika hasil model bertentangan dengan bukti, prioritaskan bukti.
+   - Ikuti aturan confidence dari system prompt.
 
 5. Tentukan:
    - "valid" atau "hoaks"

@@ -8,15 +8,15 @@ from dotenv import load_dotenv
 load_dotenv()
 SCRAPINGBEE_API_KEY = os.getenv("SCRAPINGBEE_API_KEY")
 
-def scrape_html(url):
+def scrape_html(url, render_js=True, wait=4000):
     try:
         api_url = "https://app.scrapingbee.com/api/v1/"
         params = {
             "api_key": SCRAPINGBEE_API_KEY,
             "url": url,
-            "render_js": "true",
+            "render_js": str(render_js).lower(),
             "block_ads": "true",
-            "wait": "4000"
+            "wait": str(wait)
         }
 
         response = requests.get(api_url, params=params, timeout=300)

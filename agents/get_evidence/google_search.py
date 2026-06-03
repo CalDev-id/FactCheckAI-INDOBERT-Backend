@@ -24,7 +24,7 @@ SOCIAL_MEDIA_DOMAINS = [
 ]
 
 
-def google_search(query, total_results=20):
+def google_search(query, total_results=20, return_metadata=False):
     service = build("customsearch", "v1", developerKey=GOOGLE_API_KEY)
     results = []
     start = 1
@@ -60,9 +60,15 @@ def google_search(query, total_results=20):
             if any(url.endswith(ext) for ext in BAD_EXT):
                 continue
 
-            results.append(item["link"])
+            if return_metadata:
+                results.append({
+                    "title": item.get("title", ""),
+                    "snippet": item.get("snippet", ""),
+                    "link": item["link"]
+                })
+            else:
+                results.append(item["link"])
 
         start += num
 
     return results
-
